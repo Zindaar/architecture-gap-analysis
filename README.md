@@ -8,9 +8,17 @@ Use it to scope an epic against existing code, to see what a spec already has su
 sequence a batch of related changes. It is not for greenfield work with no code, or for a single
 well-understood change.
 
-The skill is read-only: its frontmatter disallows the tools that edit files, including the
-code-editing tools of the [tokensave](https://github.com/aovestdipaperino/tokensave) MCP server,
-which it uses for code lookups when available.
+The skill is read-only by instruction: it tells Claude not to write code or edit files at any
+point in the analysis. Its frontmatter also withholds the editing tools it can name, including
+those of the [tokensave](https://github.com/aovestdipaperino/tokensave) MCP server, but Claude
+Code applies that only to the turn that invokes the skill, so the instruction is what holds
+across a longer conversation.
+
+**No extra tools are required.** When a code-graph tool is available (tokensave, an LSP index,
+a tags file), the skill uses it for definitions, callers and impact. Without one, it does the
+same lookups with plain text search (Claude Code's Grep, Glob and Read, or `git grep` / `rg`),
+confirming each match before citing it. The evidence standard is the same either way, and the
+report says which method was used.
 
 ## Install
 

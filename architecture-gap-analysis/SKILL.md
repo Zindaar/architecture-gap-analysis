@@ -1,6 +1,8 @@
 ---
 name: architecture-gap-analysis
 description: "Compares a set of target requirements — a PRD, epic, RFC, backlog, or user stories — against an existing codebase and reports, with file:line evidence, which are already satisfied, which are partial, and which are absent. Use when asked what it would take to build a set of features on top of the current system, to scope an epic against existing code, to check what a spec already has support for, or to sequence a batch of related changes against a real repository. Not for greenfield work with no existing code, and not for a single well-understood change."
+# The mcp__tokensave__* entries withhold that server's editing tools when it is installed; the
+# names should simply be ignored when it is not, and the skill runs the same either way (Step 3).
 disallowed-tools:
   - Write
   - Edit
@@ -15,6 +17,9 @@ disallowed-tools:
   - mcp__tokensave__tokensave_rename
   - mcp__tokensave__tokensave_record_decision
   - mcp__tokensave__tokensave_record_code_area
+  - mcp__tokensave__tokensave_session_start
+  - mcp__tokensave__tokensave_session_end
+  - mcp__tokensave__tokensave_run_affected_tests
 metadata:
   category: analysis
   tags:
@@ -39,7 +44,9 @@ The output is an analysis, not an implementation. Do not write production code w
 running this skill. That holds whatever tools this session happens to expose, and whether
 or not any of them are withheld — do not edit through a shell, and treat the mutating tools
 of any code-graph or refactoring server as equally out of bounds. The frontmatter withholds
-the editing tools it can name as a second line of defence, not as the reason.
+the editing tools it can name as a second line of defence, not as the reason, and Claude Code
+lifts that withholding at the user's next message: on every later turn of the analysis, this
+rule alone keeps it read-only.
 
 ## When to use
 
@@ -72,7 +79,8 @@ plainly target a different repository or subdirectory, say which one is being an
 before starting, so a wrong target costs one line rather than a full sweep.
 
 **Record the ref.** Capture the branch and commit being analysed with
-`git rev-parse --abbrev-ref HEAD` and `git rev-parse HEAD`. Do not read `.git/HEAD` and
+`git rev-parse --abbrev-ref HEAD` and `git rev-parse HEAD` (on a detached HEAD the first
+prints `HEAD`: record "detached at `<sha>`"). Do not read `.git/HEAD` and
 chase the ref file by hand — that breaks on packed refs, submodules, and worktrees. If the
 ref genuinely cannot be determined (not a git checkout, no shell), say so explicitly in the
 preamble rather than omitting it. Every verdict is only true of a specific tree.
@@ -97,9 +105,8 @@ the originating wording with each ID so every row traces back to the spec.
 >   interpretation: it goes to Open Questions, and it gets no ID.
 
 Anything too vague to verify — or verifiable but never actually stated — does **not**
-become an `R`. Collect those for Open Questions —
-an unverifiable requirement silently assessed against an invented interpretation is the
-most common way this analysis goes wrong.
+become an `R`. Collect those for Open Questions: an unverifiable requirement silently
+assessed against an invented interpretation is the most common way this analysis goes wrong.
 
 **Batching.** If atomization yields more than 25 requirements, group them by feature area
 into batches of at most 15 and run **Step 3** per batch. Emit **one consolidated** output
@@ -113,11 +120,39 @@ For each `R`, search for its implementation. Search by concept, not only by the
 requirement's vocabulary — the code will use different names than the spec. Look for the
 domain nouns, the persistence layer, the API surface, and the entry points.
 
-If this session exposes a code-graph tool — a symbol-index MCP server, an LSP index, a tags
-file — prefer it for symbol lookup, callers, and impact; it is faster and cheaper than text
-search. Otherwise use ordinary search and file reads. The evidence standard below is
-identical either way, and no finding may rest on a tool's summary that was not confirmed
-against the cited line.
+**Pick the search method once, before the first requirement, and name it in the preamble.**
+
+- **With a code-graph tool** — a symbol-index MCP server such as tokensave, an LSP index, a
+  tags file: prefer it for symbol lookup, callers, and impact; it is faster and cheaper than
+  text search.
+- **Without one** (none is exposed, it fails, it reports the repository as unindexed, or its
+  index predates the commit being analysed), use
+  text search and file reads — the Grep, Glob and Read tools, or `git grep -n` / `rg -n` in
+  a shell — and work the three lookups by hand:
+  - *Definition:* search for the name in the forms this language declares it — for example
+    `class Foo`, `struct Foo`, `interface Foo`, `trait Foo`, `enum Foo`, `type Foo`,
+    `def foo`, `async def foo`, `function foo`, `export function foo`, `const foo = (`,
+    `fn foo`, `func Foo`, or a typed method signature. Restrict the search to source files
+    with Grep's `glob` or `type` filter (or `rg -g`, or `git grep -- '*.ts'`); `rg` skips
+    `.gitignore`d paths and `git grep` searches only tracked files, which keeps most
+    vendored and generated trees out.
+  - *Callers:* first find the files that import or re-export the symbol (`import { foo }`,
+    `from x import foo`, `use crate::foo`, `require('x')`, including aliased imports), then
+    search those and the rest for every form a call takes in this language (`foo(`, `.foo(`,
+    `new Foo(`, `Foo::foo`, `Foo.foo`), for the bare name used as a value (`map(foo)`,
+    `onClick={foo}`, `handler: foo`), and for registrations by string (routes, DI containers,
+    reflection, config keys), which no call-form search finds. Include test files: a test
+    that exercises the path is evidence (rule 5).
+  - *Impact and entry points:* repeat the callers search from each caller until reaching a
+    route, handler, job, CLI command, or public API.
+
+  Text search returns matching strings, not resolved references: before citing a hit,
+  read it and confirm it is the same symbol, not a namesake in another module. When a
+  dynamic dispatch or string registration means callers cannot be enumerated completely,
+  say so in the verdict's evidence rather than implying the list is exhaustive.
+
+The evidence standard below is identical whichever method is used, and no finding may rest
+on a tool's summary that was not confirmed against the cited line.
 
 **Evidence rules — these are what make the analysis trustworthy:**
 
@@ -147,8 +182,8 @@ Emit a short preamble followed by **five** numbered sections, in this order.
 Output is chat-only. Do not write a report file during the analysis; if one is wanted,
 offer it once the analysis has ended.
 
-**Preamble.** What was analysed — repo, branch and commit, requirement source, and batch
-boundaries if batched — then the headline count: e.g. "18 requirements: 5 fully supported,
+**Preamble.** What was analysed — repo, branch and commit, requirement source, batch
+boundaries if batched, and the search method (code-graph tool or text search) — then the headline count: e.g. "18 requirements: 5 fully supported,
 6 partial, 5 missing, 2 unknown."
 
 ### 1. Feature Coverage Matrix
@@ -233,7 +268,8 @@ Not an output section. Verify each item against the drafted text, then emit:
 
 - All five sections are present, plus the preamble.
 - The preamble states the repo, the branch and commit — or why the ref could not be
-  determined — and its counts match the matrix.
+  determined — and the search method used (code-graph tool or text search), and its counts
+  match the matrix.
 - Every `R` from Step 2 has exactly one matrix row, and no row bears an ID Step 2 did not produce.
 - Every `Fully` and `Partially` row carries a `file:line` citation.
 - Every `Missing` row, and the absence half of every `Partially` row, names the terms or
